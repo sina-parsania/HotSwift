@@ -13,19 +13,22 @@ concurrency:
 jobs:
   build:
     name: ${{ matrix.name }}
-    runs-on: macos-14
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - name: "Xcode 15 — iOS 17"
+            runner: macos-14
             xcode: "15.4"
             destination: "platform=iOS Simulator,name=iPhone 15,OS=17.5"
           - name: "Xcode 16 — iOS 18"
-            xcode: "16.0"
-            destination: "platform=iOS Simulator,name=iPhone 16,OS=18.0"
+            runner: macos-15
+            xcode: "16.2"
+            destination: "platform=iOS Simulator,name=iPhone 16,OS=18.2"
           - name: "Xcode 16 — macOS"
-            xcode: "16.0"
+            runner: macos-15
+            xcode: "16.2"
             destination: "platform=macOS"
 
     steps:

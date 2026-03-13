@@ -1,0 +1,51 @@
+name: Swift
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: "Xcode 15 — iOS 17"
+            xcode: "15.4"
+            destination: "platform=iOS Simulator,name=iPhone 15,OS=17.5"
+          - name: "Xcode 16 — iOS 18"
+            xcode: "16.0"
+            destination: "platform=iOS Simulator,name=iPhone 16,OS=18.0"
+          - name: "Xcode 16 — macOS"
+            xcode: "16.0"
+            destination: "platform=macOS"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode ${{ matrix.xcode }}
+        run: sudo xcode-select -s /Applications/Xcode_${{ matrix.xcode }}.app
+
+      - name: Build
+        run: |
+          xcodebuild build \
+            -scheme HotSwift \
+            -destination "${{ matrix.destination }}" \
+            -skipPackagePluginValidation \
+            | tail -20
+
+      - name: Test
+        run: |
+          xcodebuild test \
+            -scheme HotSwift \
+            -destination "${{ matrix.destination }}" \
+            -skipPackagePluginValidation \
+            | tail -20

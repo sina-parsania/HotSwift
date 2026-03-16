@@ -8,6 +8,7 @@
 // Orchestrates the full hot-reload pipeline: watch → compile → load → interpose → notify
 
 #if DEBUG
+#if os(macOS)
 import Foundation
 import Combine
 
@@ -89,10 +90,17 @@ public final class ReloadPipeline {
     ///   exclude patterns, debounce interval, and verbosity settings.
     public init(configuration: PipelineConfiguration) {
         self.configuration = configuration
+        #if os(macOS)
         self.fileWatcher = FSEventsWatcher(
             debounceInterval: configuration.debounceInterval,
             excludePatterns: configuration.excludePatterns
         )
+        #else
+        self.fileWatcher = PollingFileWatcher(
+            pollInterval: max(configuration.debounceInterval, 1.0),
+            excludePatterns: configuration.excludePatterns
+        )
+        #endif
         self.loader = DylibLoader()
         self.changeAnalyzer = ChangeAnalyzer()
         self.queue = DispatchQueue(label: "com.hotswift.reload-pipeline", qos: .userInitiated)
@@ -353,56 +361,33 @@ public final class ReloadPipeline {
             return dylibPath
         }
 
-        // Fallback: basic compilation with minimal flags
+        // Fallback: basic compilation with minimal flags via ShellExecutor
         compilationCounter += 1
         let tempDir = NSTemporaryDirectory() + "hotswift"
         try? FileManager.default.createDirectory(atPath: tempDir, withIntermediateDirectories: true)
         let outputPath = (tempDir as NSString).appendingPathComponent("reload_\(compilationCounter).dylib")
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
-        process.arguments = [
-            "swiftc",
-            "-emit-library",
-            "-o", outputPath,
-            "-module-name", "HotSwiftReload\(compilationCounter)",
-            "-Xlinker", "-undefined", "-Xlinker", "dynamic_lookup",
-            filePath
-        ]
+        let result = ShellExecutor.run(
+            executablePath: "/usr/bin/xcrun",
+            arguments: [
+                "swiftc",
+                "-emit-library",
+                "-o", outputPath,
+                "-module-name", "HotSwiftReload\(compilationCounter)",
+                "-Xlinker", "-undefined", "-Xlinker", "dynamic_lookup",
+                filePath
+            ],
+            timeout: 30
+        )
 
-        let stderrPipe = Pipe()
-        process.standardError = stderrPipe
-        process.standardOutput = FileHandle.nullDevice
-
-        try process.run()
-
-        // Read stderr async to prevent deadlock
-        var stderrData = Data()
-        let group = DispatchGroup()
-        group.enter()
-        DispatchQueue.global().async {
-            stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
-            group.leave()
+        if !result.stderr.isEmpty {
+            diagnostics.append(result.stderr)
         }
 
-        // Timeout after 30 seconds
-        DispatchQueue.global().asyncAfter(deadline: .now() + 30) { [weak process] in
-            guard let process = process, process.isRunning else { return }
-            process.terminate()
-        }
-
-        process.waitUntilExit()
-        group.wait()
-
-        let stderrString = String(data: stderrData, encoding: .utf8) ?? ""
-        if !stderrString.isEmpty {
-            diagnostics.append(stderrString)
-        }
-
-        guard process.terminationStatus == 0 else {
+        guard result.exitCode == 0 else {
             throw CompilationError.compilationFailed(
-                exitCode: process.terminationStatus,
-                output: stderrString
+                exitCode: result.exitCode,
+                output: result.stderr
             )
         }
 
@@ -538,4 +523,5 @@ enum CompilationError: LocalizedError {
         }
     }
 }
-#endif
+#endif // os(macOS)
+#endif // DEBUG

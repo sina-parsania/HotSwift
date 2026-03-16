@@ -8,6 +8,7 @@
 // Controls Xcode via AppleScript to trigger rebuilds when structural changes are detected
 
 #if DEBUG
+#if os(macOS)
 import Foundation
 
 // MARK: - Xcode Controller
@@ -87,38 +88,16 @@ enum XcodeController {
 
     /// Execute an AppleScript string via `osascript` and return any error.
     private static func runAppleScript(_ source: String) -> Error? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        process.arguments = ["-e", source]
+        let result = ShellExecutor.run(
+            executablePath: "/usr/bin/osascript",
+            arguments: ["-e", source],
+            timeout: 10
+        )
 
-        let stderrPipe = Pipe()
-        process.standardError = stderrPipe
-        process.standardOutput = Pipe() // discard stdout
-
-        do {
-            try process.run()
-        } catch {
-            return error
-        }
-
-        // Read stderr on background thread BEFORE waitUntilExit to prevent
-        // pipe buffer deadlock if osascript produces large error output.
-        var stderrData = Data()
-        let group = DispatchGroup()
-        group.enter()
-        DispatchQueue.global().async {
-            stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
-            group.leave()
-        }
-
-        process.waitUntilExit()
-        group.wait()
-
-        guard process.terminationStatus == 0 else {
-            let message = String(data: stderrData, encoding: .utf8) ?? "Unknown osascript error"
+        guard result.exitCode == 0 else {
             return XcodeControllerError.appleScriptFailed(
-                exitCode: process.terminationStatus,
-                message: message
+                exitCode: result.exitCode,
+                message: result.stderr.isEmpty ? "Unknown osascript error" : result.stderr
             )
         }
 
@@ -141,4 +120,5 @@ enum XcodeControllerError: LocalizedError {
     }
 }
 
-#endif
+#endif // os(macOS)
+#endif // DEBUG

@@ -8,6 +8,7 @@
 // FSEvents-based file watcher for detecting Swift file changes on macOS
 
 #if DEBUG
+#if os(macOS)
 import Foundation
 import CoreServices
 
@@ -332,4 +333,5 @@ private func fsEventsCallback(
         watcher.handleRawEvent(path: path, flags: flags)
     }
 }
-#endif
+#endif // os(macOS)
+#endif // DEBUG

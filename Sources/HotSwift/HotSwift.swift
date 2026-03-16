@@ -10,10 +10,12 @@
 import Foundation
 
 #if DEBUG
+
+#if os(macOS)
 import HotSwiftCore
 import Combine
 
-/// HotSwift — iOS Hot-Reload Engine
+/// HotSwift — Hot-Reload Engine
 ///
 /// Drop-in hot-reload for UIKit and SwiftUI projects. HotSwift watches your Swift source
 /// files for changes, recompiles them on the fly, and loads the new code into the running
@@ -36,26 +38,6 @@ import Combine
 /// file changes, recompiles them using Xcode's cached build settings, and loads the
 /// result into the running process.
 ///
-/// ## Observing Reload Events
-///
-/// **Combine:**
-/// ```swift
-/// HotSwift.reloadEvents
-///     .filter { $0.status == .success }
-///     .sink { event in print("Reloaded: \(event.filePath)") }
-///     .store(in: &cancellables)
-/// ```
-///
-/// **NotificationCenter:**
-/// ```swift
-/// NotificationCenter.default.addObserver(
-///     forName: HotSwift.didReloadNotification,
-///     object: nil, queue: .main
-/// ) { notification in
-///     // Refresh your UI
-/// }
-/// ```
-///
 /// ## How It Works
 ///
 /// 1. **Watch** — FSEvents monitors your source directories for `.swift` file changes.
@@ -64,19 +46,18 @@ import Combine
 /// 4. **Notify** — A `HotSwiftReloadEvent` is emitted for UI refresh.
 ///
 /// In Release builds, HotSwift compiles to empty stubs — zero overhead, zero binary size impact.
+///
+/// > Note: On iOS, `start()` is a no-op because the iOS sandbox does not allow process
+/// > spawning (required for `swiftc`). Run HotSwift from macOS (Xcode on Mac) to use
+/// > hot-reload with the iOS Simulator.
 public final class HotSwift {
 
     // MARK: - Shared Instance
 
-    /// The shared singleton instance.
     public static let shared = HotSwift()
 
     // MARK: - Public API
 
-    /// A Combine publisher that emits an event after every reload attempt.
-    ///
-    /// Events are delivered on the **main thread** and include both successes and failures.
-    /// Filter by `.status` to handle only the cases you care about.
     public static var reloadEvents: AnyPublisher<HotSwiftReloadEvent, Never> {
         guard let pipeline = shared.pipeline else {
             return Empty().eraseToAnyPublisher()
@@ -96,11 +77,6 @@ public final class HotSwift {
             .eraseToAnyPublisher()
     }
 
-    /// Notification posted after every reload attempt.
-    ///
-    /// The `userInfo` dictionary contains:
-    /// - `"filePath"`: The source file path (`String`)
-    /// - `"affectedClasses"`: Detected type names (`[String]`)
     public static let didReloadNotification = Notification.Name("HotSwiftDidReload")
 
     // MARK: - State
@@ -110,23 +86,6 @@ public final class HotSwift {
 
     // MARK: - Start / Stop
 
-    /// Start the hot-reload engine with the given configuration.
-    ///
-    /// Call this once during app launch, guarded by `#if DEBUG`:
-    ///
-    /// ```swift
-    /// #if DEBUG
-    /// HotSwift.start()
-    /// #endif
-    /// ```
-    ///
-    /// If `config.watchPaths` is empty, the project root is auto-detected by walking
-    /// up from the calling file's location until an `.xcodeproj` or `.xcworkspace` is found.
-    ///
-    /// - Parameters:
-    ///   - sourceFile: The caller's file path (auto-populated by `#file`). Used for
-    ///     project root detection when `watchPaths` is empty.
-    ///   - config: Configuration options. Defaults to `HotSwiftConfiguration.default`.
     public static func start(
         sourceFile: String = #file,
         config: HotSwiftConfiguration = .default
@@ -134,10 +93,6 @@ public final class HotSwift {
         shared.startPipeline(sourceFile: sourceFile, config: config)
     }
 
-    /// Stop the hot-reload engine and release all resources.
-    ///
-    /// The file watcher is stopped and the pipeline is torn down. You can call
-    /// `start()` again to restart.
     public static func stop() {
         shared.stopPipeline()
     }
@@ -154,7 +109,6 @@ public final class HotSwift {
 
         var resolvedConfig = config
 
-        // Auto-detect project root from #file if no watch paths are provided.
         if resolvedConfig.watchPaths.isEmpty {
             if let projectRoot = detectProjectRoot(from: sourceFile) {
                 resolvedConfig.watchPaths = [projectRoot]
@@ -198,13 +152,6 @@ public final class HotSwift {
 
     // MARK: - Project Root Detection
 
-    /// Walks up the directory tree from the given source file path to find the project root.
-    ///
-    /// The project root is defined as the first directory that contains a `.xcodeproj`
-    /// or `.xcworkspace` bundle. Searches up to 10 levels to avoid walking to `/`.
-    ///
-    /// - Parameter sourceFile: A file path within the project (typically from `#file`).
-    /// - Returns: The detected project root path, or `nil` if not found.
     private func detectProjectRoot(from sourceFile: String) -> String? {
         let sourceURL = URL(fileURLWithPath: sourceFile)
         var directory = sourceURL.deletingLastPathComponent()
@@ -223,7 +170,6 @@ public final class HotSwift {
 
             let parent = directory.deletingLastPathComponent()
 
-            // Stop if we've reached the filesystem root.
             if parent.path == directory.path {
                 break
             }
@@ -236,11 +182,45 @@ public final class HotSwift {
 
     // MARK: - Logging
 
-    /// Prints a prefixed log message to the console.
     private func log(_ message: String) {
         print("[HotSwift] \(message)")
     }
 }
+
+#else // !os(macOS) — iOS / other platforms
+
+import Foundation
+import Combine
+
+/// iOS stub — hot-reload requires macOS for process spawning (`swiftc`).
+///
+/// `start()` logs a diagnostic message and returns. All other APIs are no-ops.
+/// HotSwiftUI (UIViewController swizzling, notification observation) still works —
+/// it listens for `HotSwiftDidReload` notifications that would be posted by a
+/// companion macOS process in a future network-based reload mode.
+public final class HotSwift {
+    public static let shared = HotSwift()
+    public static let didReloadNotification = Notification.Name("HotSwiftDidReload")
+
+    public static var reloadEvents: AnyPublisher<HotSwiftReloadEvent, Never> {
+        Empty().eraseToAnyPublisher()
+    }
+
+    public static func start(
+        sourceFile: String = #file,
+        config: HotSwiftConfiguration = .default
+    ) {
+        print("[HotSwift] Hot-reload is only available on macOS. "
+              + "The iOS sandbox does not allow process spawning required for compilation. "
+              + "Run your app from Xcode on Mac to use hot-reload with the Simulator.")
+    }
+
+    public static func stop() {}
+
+    private init() {}
+}
+
+#endif // os(macOS)
 
 #else
 

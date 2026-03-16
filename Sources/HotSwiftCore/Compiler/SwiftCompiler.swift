@@ -8,6 +8,7 @@
 // Invokes swiftc to compile a single Swift file into a dynamically loadable library
 
 #if DEBUG
+#if os(macOS)
 import Foundation
 
 // MARK: - Errors
@@ -210,58 +211,15 @@ final class SwiftCompiler {
 
     /// Runs a subprocess synchronously, capturing stdout and stderr.
     private func runProcess(executablePath: String, arguments: [String]) -> ProcessResult {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: executablePath)
-        process.arguments = arguments
-
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
-
-        do {
-            try process.run()
-        } catch {
-            return ProcessResult(
-                exitCode: -1,
-                stdout: "",
-                stderr: "Failed to launch process: \(error.localizedDescription)"
-            )
-        }
-
-        // Timeout after 30 seconds to prevent hanging
-        DispatchQueue.global().asyncAfter(deadline: .now() + 30) { [weak process] in
-            guard let process = process, process.isRunning else { return }
-            process.terminate()
-        }
-
-        // Read output on background threads to avoid pipe buffer deadlocks on large output
-        var stdoutData = Data()
-        var stderrData = Data()
-        let group = DispatchGroup()
-
-        group.enter()
-        DispatchQueue.global().async {
-            stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-            group.leave()
-        }
-
-        group.enter()
-        DispatchQueue.global().async {
-            stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
-            group.leave()
-        }
-
-        process.waitUntilExit()
-        group.wait()
-
-        let stdoutString = String(data: stdoutData, encoding: .utf8) ?? ""
-        let stderrString = String(data: stderrData, encoding: .utf8) ?? ""
-
+        let result = ShellExecutor.run(
+            executablePath: executablePath,
+            arguments: arguments,
+            timeout: 30
+        )
         return ProcessResult(
-            exitCode: process.terminationStatus,
-            stdout: stdoutString,
-            stderr: stderrString
+            exitCode: result.exitCode,
+            stdout: result.stdout,
+            stderr: result.stderr
         )
     }
 
@@ -323,4 +281,5 @@ final class SwiftCompiler {
         throw SwiftCompilerError.swiftcNotFound
     }
 }
-#endif
+#endif // os(macOS)
+#endif // DEBUG

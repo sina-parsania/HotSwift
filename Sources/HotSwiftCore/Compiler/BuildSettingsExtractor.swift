@@ -8,6 +8,7 @@
 // Extracts build settings from DerivedData for recompilation of individual Swift files
 
 #if DEBUG
+#if os(macOS)
 import Foundation
 
 // MARK: - Errors
@@ -81,7 +82,15 @@ final class BuildSettingsExtractor {
     // MARK: - Constants
 
     private static let derivedDataPath: String = {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let home: String
+        #if os(macOS)
+        home = FileManager.default.homeDirectoryForCurrentUser.path
+        #else
+        // On iOS simulator, use the host macOS home directory for DerivedData access
+        home = ProcessInfo.processInfo.environment["SIMULATOR_HOST_HOME"]
+            ?? ProcessInfo.processInfo.environment["HOME"]
+            ?? NSHomeDirectory()
+        #endif
         return (home as NSString).appendingPathComponent(
             "Library/Developer/Xcode/DerivedData"
         )
@@ -389,4 +398,5 @@ final class BuildSettingsExtractor {
         )
     }
 }
-#endif
+#endif // os(macOS)
+#endif // DEBUG

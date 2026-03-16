@@ -8,6 +8,7 @@
 // Parses Xcode xcactivitylog files to extract Swift compile commands
 
 #if DEBUG
+#if os(macOS)
 import Foundation
 
 // MARK: - Errors
@@ -72,58 +73,21 @@ struct XcactivitylogParser {
             throw XcactivitylogParserError.fileNotFound(path)
         }
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/gunzip")
-        process.arguments = ["--stdout", path]
+        let result = ShellExecutor.runForData(
+            executablePath: "/usr/bin/gunzip",
+            arguments: ["--stdout", path],
+            timeout: 60
+        )
 
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
-
-        do {
-            try process.run()
-        } catch {
-            throw XcactivitylogParserError.decompressionFailed(error.localizedDescription)
+        guard result.exitCode == 0 else {
+            throw XcactivitylogParserError.decompressionFailed(result.stderr)
         }
 
-        // Kill the process if it exceeds the timeout — prevents indefinite hangs
-        // on corrupted logs. Must fire BEFORE waitUntilExit to unblock it.
-        let timeoutSeconds: Double = 60
-        let timeoutWorkItem = DispatchWorkItem { [weak process] in
-            guard let process = process, process.isRunning else { return }
-            process.terminate()
-        }
-        DispatchQueue.global().asyncAfter(deadline: .now() + timeoutSeconds, execute: timeoutWorkItem)
-
-        // Read both pipes on background threads to avoid pipe deadlock
-        // when output is larger than the pipe buffer (~64 KB).
-        var outputData = Data()
-        var stderrData = Data()
-        let group = DispatchGroup()
-
-        group.enter()
-        DispatchQueue.global().async {
-            outputData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-            group.leave()
+        guard !result.stdoutData.isEmpty else {
+            throw XcactivitylogParserError.decompressionFailed("Empty output from gunzip")
         }
 
-        group.enter()
-        DispatchQueue.global().async {
-            stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
-            group.leave()
-        }
-
-        process.waitUntilExit()
-        timeoutWorkItem.cancel()
-        group.wait()
-
-        guard process.terminationStatus == 0 else {
-            let stderrString = String(data: stderrData, encoding: .utf8) ?? "unknown error"
-            throw XcactivitylogParserError.decompressionFailed(stderrString)
-        }
-
-        return outputData
+        return result.stdoutData
     }
 
     // MARK: - Command Extraction
@@ -308,4 +272,5 @@ struct XcactivitylogParser {
         return tokens
     }
 }
-#endif
+#endif // os(macOS)
+#endif // DEBUG
